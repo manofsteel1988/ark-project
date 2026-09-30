@@ -1,0 +1,258 @@
+// ============================================================
+// ARK — Schéma de base de données (Prisma)
+// ============================================================
+// Provider par défaut : SQLite, pour que le projet tourne en local
+// sans dépendance externe (`npx prisma migrate dev`).
+// Pour la production, changer provider = "postgresql" et DATABASE_URL
+// dans .env (voir README backend).
+// ============================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ------------------------------------------------------------
+// Utilisateurs & compte client (section 35-36 du cahier des charges)
+// ------------------------------------------------------------
+model User {
+  id            String   @id @default(cuid())
+  email         String   @unique
+  passwordHash  String
+  firstName     String
+  lastName      String
+  createdAt     DateTime @default(now())
+
+  favorites       Favorite[]
+  configurations  Configuration[]
+  orders          Order[]
+  reviews         Review[]
+  carts           Cart[]
+}
+
+// ------------------------------------------------------------
+// Catalogue — modèles déjà créés (section 8-9)
+// ------------------------------------------------------------
+// NOTE : SQLite ne supporte pas le type `enum` de Prisma (contrairement à
+// PostgreSQL/MySQL) — on utilise donc de simples chaînes de caractères, avec
+// les valeurs attendues indiquées en commentaire. Si vous passez en
+// PostgreSQL pour la production, vous pourrez réintroduire de vrais enums.
+// Category attendues : "HOMME" | "FEMME" | "MIXTE"
+
+model Product {
+  id          String   @id @default(cuid())
+  slug        String   @unique
+  name        String
+  category    String
+  basePrice   Int // prix en centimes
+  description String
+  isPackCouple Boolean @default(false)
+  isBestSeller Boolean @default(false)
+  isNew        Boolean @default(false)
+  createdAt   DateTime @default(now())
+
+  images        ProductImage[]
+  favorites     Favorite[]
+  reviews       Review[]
+  orderItems    OrderItem[]
+  cartItems     CartItem[]
+  // Configuration "de base" associée à ce modèle catalogue (pièces par défaut)
+  defaultPieces ProductDefaultPiece[]
+}
+
+model ProductImage {
+  id        String  @id @default(cuid())
+  productId String
+  url       String
+  position  Int     @default(0)
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+}
+
+// ------------------------------------------------------------
+// Configurateur — pièces & compatibilité (section 10, 12, 39)
+// ------------------------------------------------------------
+// PieceType attendu : "BOITIER" | "CADRAN" | "BRACELET" | "AIGUILLES" | "OPTION"
+
+model Piece {
+  id            String    @id @default(cuid())
+  type          String
+  name          String
+  sku           String    @unique
+  priceModifier Int       @default(0) // en centimes, s'ajoute au prix de base
+  imageUrl      String
+  available     Boolean   @default(true)
+
+  // Compatibilité : quelles pièces peuvent se combiner avec celle-ci.
+  // Auto-relation many-to-many via table pivot explicite pour rester lisible en SQLite.
+  compatibleFrom PieceCompatibility[] @relation("FromPiece")
+  compatibleTo   PieceCompatibility[] @relation("ToPiece")
+
+  configurationPieces ConfigurationPiece[]
+  productDefaults     ProductDefaultPiece[]
+}
+
+// Compatibilité déclarée dans un seul sens (A -> B) ; le service de configuration
+// interroge les deux colonnes pour déterminer si deux pièces sont compatibles.
+model PieceCompatibility {
+  id            String @id @default(cuid())
+  fromPieceId   String
+  toPieceId     String
+
+  fromPiece Piece @relation("FromPiece", fields: [fromPieceId], references: [id], onDelete: Cascade)
+  toPiece   Piece @relation("ToPiece", fields: [toPieceId], references: [id], onDelete: Cascade)
+
+  @@unique([fromPieceId, toPieceId])
+}
+
+model ProductDefaultPiece {
+  id        String @id @default(cuid())
+  productId String
+  pieceId   String
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  piece   Piece   @relation(fields: [pieceId], references: [id], onDelete: Cascade)
+
+  @@unique([productId, pieceId])
+}
+
+// ------------------------------------------------------------
+// Créations personnalisées (section 10-11 : sauvegarder / partager)
+// ------------------------------------------------------------
+model Configuration {
+  id          String   @id @default(cuid())
+  userId      String?
+  label       String   @default("Ma création ARK")
+  totalPrice  Int
+  isSaved     Boolean  @default(false)
+  shareToken  String?  @unique // pour "Partager ma création"
+  createdAt   DateTime @default(now())
+
+  user   User?                @relation(fields: [userId], references: [id], onDelete: SetNull)
+  pieces ConfigurationPiece[]
+  cartItems  CartItem[]
+  orderItems OrderItem[]
+}
+
+model ConfigurationPiece {
+  id              String @id @default(cuid())
+  configurationId String
+  pieceId         String
+
+  configuration Configuration @relation(fields: [configurationId], references: [id], onDelete: Cascade)
+  piece         Piece         @relation(fields: [pieceId], references: [id], onDelete: Cascade)
+
+  @@unique([configurationId, pieceId])
+}
+
+// ------------------------------------------------------------
+// Packaging (étape obligatoire après ajout au panier)
+// ------------------------------------------------------------
+model Packaging {
+  id            String @id @default(cuid())
+  name          String
+  description   String
+  priceModifier Int    @default(0)
+  imageUrl      String
+
+  cartItems  CartItem[]
+  orderItems OrderItem[]
+}
+
+// ------------------------------------------------------------
+// Panier & commandes (section 32-37)
+// ------------------------------------------------------------
+model Cart {
+  id        String   @id @default(cuid())
+  userId    String?
+  sessionId String?  @unique // panier invité, avant compte
+  createdAt DateTime @default(now())
+
+  user  User?      @relation(fields: [userId], references: [id], onDelete: SetNull)
+  items CartItem[]
+}
+
+model CartItem {
+  id              String  @id @default(cuid())
+  cartId          String
+  productId       String?
+  configurationId String?
+  packagingId     String?
+  quantity        Int     @default(1)
+  unitPrice       Int
+
+  cart          Cart           @relation(fields: [cartId], references: [id], onDelete: Cascade)
+  product       Product?       @relation(fields: [productId], references: [id])
+  configuration Configuration? @relation(fields: [configurationId], references: [id])
+  packaging     Packaging?     @relation(fields: [packagingId], references: [id])
+}
+
+// OrderStatus attendu : "VALIDEE" | "PREPARATION" | "ASSEMBLAGE" | "CONTROLE" | "EXPEDIEE" | "LIVREE"
+
+model Order {
+  id           String      @id @default(cuid())
+  userId       String
+  status       String      @default("VALIDEE")
+  totalPrice   Int
+  shippingName    String
+  shippingAddress String
+  shippingCity    String
+  shippingZip     String
+  trackingNumber  String?
+  createdAt    DateTime    @default(now())
+
+  user  User        @relation(fields: [userId], references: [id])
+  items OrderItem[]
+}
+
+model OrderItem {
+  id              String  @id @default(cuid())
+  orderId         String
+  productId       String?
+  configurationId String?
+  packagingId     String?
+  quantity        Int     @default(1)
+  unitPrice       Int
+
+  order         Order          @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product       Product?       @relation(fields: [productId], references: [id])
+  configuration Configuration? @relation(fields: [configurationId], references: [id])
+  packaging     Packaging?     @relation(fields: [packagingId], references: [id])
+}
+
+// ------------------------------------------------------------
+// Favoris (section 31)
+// ------------------------------------------------------------
+model Favorite {
+  id        String   @id @default(cuid())
+  userId    String
+  productId String
+  createdAt DateTime @default(now())
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, productId])
+}
+
+// ------------------------------------------------------------
+// Avis clients (section 27, avec photo — cf. Fiche_Cyril.docx)
+// ------------------------------------------------------------
+model Review {
+  id         String   @id @default(cuid())
+  productId  String
+  userId     String?
+  authorName String
+  rating     Int // 1 à 5
+  comment    String
+  photoUrl   String?
+  brandReply String?
+  createdAt  DateTime @default(now())
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  user    User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+}

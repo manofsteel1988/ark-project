@@ -1,0 +1,16 @@
+# Dépendances (se réinstallent avec npm install)
+node_modules/
+
+# Secrets et configuration locale
+.env
+
+# Base de données locale
+backend/prisma/dev.db
+backend/prisma/dev.db-journal
+
+# Logs
+*.log
+
+# Fichiers système
+.DS_Store
+Thumbs.db
