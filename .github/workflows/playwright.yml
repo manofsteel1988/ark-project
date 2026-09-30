@@ -8,20 +8,55 @@ jobs:
   test:
     timeout-minutes: 60
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tests
     steps:
     - uses: actions/checkout@v4
+
     - uses: actions/setup-node@v4
       with:
         node-version: lts/*
-    - name: Install dependencies
+
+    # --- Backend : on installe, prépare la base, puis on démarre une vraie API ---
+    - name: Installer les dépendances du backend
+      working-directory: backend
       run: npm ci
-    - name: Install Playwright Browsers
+
+    - name: Préparer la base de données de test
+      working-directory: backend
+      run: |
+        npx prisma migrate deploy
+        npm run seed
+      env:
+        DATABASE_URL: "file:./dev.db"
+
+    - name: Démarrer le backend en arrière-plan
+      working-directory: backend
+      run: nohup npm start > server.log 2>&1 &
+      env:
+        DATABASE_URL: "file:./dev.db"
+        PORT: 4000
+        JWT_SECRET: "ci-test-secret"
+        JWT_EXPIRES_IN: "7d"
+        FRONTEND_ORIGIN: "*"
+
+    - name: Attendre que le backend réponde
+      run: npx wait-on http://localhost:4000/health --timeout 30000
+
+    # --- Tests Playwright ---
+    - name: Installer les dépendances de test
+      run: npm ci
+
+    - name: Installer les navigateurs Playwright
       run: npx playwright install --with-deps
-    - name: Run Playwright tests
+
+    - name: Lancer les tests Playwright
       run: npx playwright test
+
     - uses: actions/upload-artifact@v4
       if: ${{ !cancelled() }}
       with:
         name: playwright-report
-        path: playwright-report/
+        path: tests/playwright-report/
         retention-days: 30
